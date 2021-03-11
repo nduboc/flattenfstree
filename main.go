@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,8 @@ import (
 )
 
 const versionInfo = "v0.1"
+
+const readDirBufferLen = 2
 
 func main() {
 	var rootCommand = &cobra.Command{
@@ -70,7 +74,89 @@ func main() {
 	}
 }
 
+type stringSet map[string]struct{}
+
 func moveFiles(source, target string) error {
-	fmt.Printf("Moving %s into %s\n", source, target)
-	return nil
+	fmt.Printf("Moving files from %s into %s...\n", source, target)
+
+	var copiedFiles stringSet
+	copiedFiles, err := listDir(target)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%d files in target dir\n", len(copiedFiles))
+
+	err = filepath.WalkDir(source, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			if filepath.Dir(path) == target {
+				fmt.Printf("SKIP IN PLACE %s\n", path)
+			} else {
+				originalName := filepath.Base(path)
+				destName := findAvailableName(originalName, copiedFiles)
+				if originalName != destName {
+					fmt.Printf("DUPLICATED %s to %s\n", path, destName)
+				} else {
+					fmt.Printf("MOVE %s to %s\n", path, destName)
+				}
+				copiedFiles[destName] = struct{}{}
+			}
+		}
+		return nil
+	})
+
+	return err
+}
+
+func findAvailableName(original string, files stringSet) string {
+	// assume we'll find a candidate before i overflows
+	i := 1
+	candidate := original
+	for {
+		_, ok := files[candidate]
+		if !ok {
+			break // found an unused name
+		}
+		candidate = injectInt(original, i)
+		i++
+	}
+	return candidate
+}
+
+func injectInt(filename string, i int) string {
+	mainNameStart := 0 // index after trailing dots
+	for ; filename[mainNameStart] == '.' && mainNameStart < len(filename); mainNameStart++ {
+	}
+	if mainNameStart == len(filename) {
+		panic(fmt.Sprintf("Unsupported filename '%s'", filename))
+	}
+	mainPart := filename[mainNameStart:]
+	ext := filepath.Ext(mainPart)
+	return fmt.Sprintf("%s%s-%d%s", filename[0:mainNameStart], strings.TrimSuffix(mainPart, ext), i, ext)
+}
+
+func listDir(path string) (stringSet, error) {
+	fileSet := make(stringSet)
+	dir, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		list, err := dir.Readdirnames(readDirBufferLen)
+		if len(list) == 0 {
+			if err == io.EOF {
+				break
+			}
+
+			return nil, err
+		}
+
+		for _, n := range list {
+			fileSet[n] = struct{}{}
+		}
+	}
+
+	return fileSet, nil
 }
