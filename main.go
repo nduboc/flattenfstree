@@ -1,3 +1,6 @@
+// Copyright (C) 2021 Nicolas Duboc
+// MIT License
+
 package main
 
 import (
